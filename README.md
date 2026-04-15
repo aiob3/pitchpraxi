@@ -1,119 +1,180 @@
-# Speechfire <img src="extension-firefox/icon/icon-128.png" alt="🔥" width="32" height="32">
+# PitchPraxi
 
-<img src="banner.png" alt="Speechfire Banner" width="100%">
+System-wide voice-to-text for Linux, powered by **whisper.cpp** + **Intel MKL**.
 
-## Overview
+> *Resgatando o primórdio do Pitch Perfect — da voz ao texto em qualquer aplicação.*
 
-Speechfire is a Firefox extension that provides offline speech-to-text functionality. It uses a local server for processing and supports multiple languages.
+Originally forked from [Jejkobb/Speechfire](https://github.com/Jejkobb/Speechfire), PitchPraxi evolved into a standalone system-wide dictation tool with a native C++ inference engine, configurable hotkeys, multi-language support, and a system tray interface.
 
-### Key Features
+## Features
 
-- 🦊✨ Firefox and Chrome support
-- 🖥️ Local server for offline processing
-- 🌐 Multilingual support
-- ⌨️ Hotkey (`Alt+A`) to start/stop recording
+- **System-wide dictation** — Works in any application (terminal, VS Code, Cursor, browser, etc.)
+- **~1.2s end-to-end latency** — whisper.cpp with Intel MKL (AVX-VNNI) on CPU
+- **188MB RAM** — Lightweight native C++ server, no Python runtime overhead
+- **10 languages** — Portuguese, English, Spanish, French, German, Italian, Japanese, Chinese, Korean + auto-detect
+- **Translate → English** — Speak in any language, get text in English
+- **Configurable hotkey** — Default: `Alt+Backspace`. Change via system tray menu
+- **System tray** — Full control: language switch, translate toggle, server restart, log export, transcription history
+- **Smart paste** — Detects terminal (Ctrl+Shift+V) vs GUI apps (Ctrl+V) automatically
+- **Persistent config** — Settings saved in `~/.config/pitchpraxi/config.json`
+- **Transcription history** — Stored in `~/.config/pitchpraxi/history.jsonl`
+- **Optional noise filter** — `--no-speech-thold` to suppress music/background noise
+
+## Architecture
+
+```
+┌─────────────────────┐     ┌──────────────────────────┐
+│  pitchpraxi-global  │────▶│   whisper-server (C++)   │
+│  (Python, 34MB)     │     │   whisper.cpp + MKL      │
+│                     │     │   (188MB, port 5000)     │
+│  • System tray      │◀────│                          │
+│  • Global hotkey    │JSON │  Model: ggml-base.bin    │
+│  • Mic recording    │     │  Engine: Intel MKL       │
+│  • Smart paste      │     │  Threads: 8              │
+└─────────────────────┘     └──────────────────────────┘
+```
+
+## Performance Benchmarks (Intel i7-1355U, CPU-only)
+
+| Engine | 10s Audio | RAM | Status |
+|--------|-----------|-----|--------|
+| openai-whisper small (Python) | 4.9s | 2.4GB | Replaced |
+| faster-whisper base INT8 | 2.8s | 546MB | Replaced |
+| Qwen3-ASR ONNX INT8 | 5.8s | 2.9GB | Tested, slower |
+| **whisper.cpp base MKL (C++)** | **1.27s** | **188MB** | **Current** |
 
 ## Prerequisites
-### Running Linux or Windows
-MacOS has some convoluted requirements to get Whisper running, so it isn't supported. Just use the system dictation tool - it works for everything.
 
-### FFmpeg
-Whisper requires [FFmpeg](https://ffmpeg.org/download.html), so you need to have it installed. It's used for a lot of things, you won't regret installing it! You can install it using package managers:
-
-```bash
-# Ubuntu/Debian
-sudo apt install ffmpeg
-
-# Windows (using Chocolatey)
-choco install ffmpeg
-```
+- Linux (tested on Zorin OS 18 / Ubuntu 24.04)
+- Intel CPU with AVX2 (Haswell+) — AVX-VNNI recommended (12th gen+)
+- Intel oneAPI MKL (`intel-oneapi-mkl-devel`)
+- Python 3.12+ (for system tray only)
+- FFmpeg, xdotool, xclip, xprop
 
 ## Installation
 
-1. **Set up Python environment**
-
-   ```bash
-   python -m venv speechfire
-   source speechfire/bin/activate  # On Windows: speechfire\Scripts\activate
-   pip install -r requirements-lock.txt # confirmed working
-   # or
-   pip install -r requirements.txt # latest versions, may break
-   ```
-
-2. **Install Extension**
-- Add the extension via the official [Firefox Add-ons site](https://addons.mozilla.org/en-US/firefox/addon/speechfire/) or [Chrome Web Store](https://chromewebstore.google.com/detail/speechfire/ehcikcfkjplgancoaapobfmfjhbdomdm?hl=en)
-   - Or install from source:
-     - Manually install `extension-firefox.xpi` in Firefox
-     - Manually install `extension-chrome.zip` in Chrome
-
-## Docker (Optional)
-
-If you prefer Docker, you can run the server without installing Python locally:
+### 1. Build whisper.cpp with Intel MKL
 
 ```bash
-docker compose up --build
+# Install Intel oneAPI
+wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | \
+  sudo gpg --dearmor -o /usr/share/keyrings/intel-oneapi-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/intel-oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+  sudo tee /etc/apt/sources.list.d/intel-oneapi.list
+sudo apt update && sudo apt install -y intel-oneapi-compiler-dpcpp-cpp intel-oneapi-mkl-devel cmake
+
+# Clone and build
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+source /opt/intel/oneapi/setvars.sh
+cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Intel10_64lp \
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake --build build --config Release -j$(nproc)
+
+# Download model
+bash models/download-ggml-model.sh base
 ```
 
-Notes:
-- The image pre-downloads the Whisper model, so build time and size scale with the chosen model.
-- The container binds to `0.0.0.0` by default. If you want localhost-only access, set `SERVER_HOST=127.0.0.1` or use `docker-compose.override.yml`.
+### 2. Install PitchPraxi
+
+```bash
+git clone https://github.com/aiob3/pitchpraxi.git
+cd pitchpraxi
+
+# System dependencies
+sudo apt install -y python3.12-venv ffmpeg xdotool xclip \
+  python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-appindicator3-0.1 \
+  portaudio19-dev
+
+# Python venv (with system GTK access)
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install pynput pyaudio requests
+```
+
+### 3. Set up systemd services
+
+```bash
+# Server (whisper.cpp)
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/pitchpraxi.service << 'EOF'
+[Unit]
+Description=PitchPraxi STT Server (whisper.cpp + Intel MKL)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/whisper.cpp
+Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib:/opt/intel/oneapi/compiler/latest/lib
+ExecStart=/path/to/whisper.cpp/build/bin/whisper-server -m models/ggml-base.bin -l pt --port 5000 -t 8 --no-timestamps
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Global (tray + hotkey)
+cat > ~/.config/systemd/user/pitchpraxi-global.service << 'EOF'
+[Unit]
+Description=PitchPraxi Global — System-wide voice-to-text
+After=pitchpraxi.service
+Requires=pitchpraxi.service
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/pitchpraxi
+Environment=DISPLAY=:0
+ExecStart=/path/to/pitchpraxi/.venv/bin/python pitchpraxi-global.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable pitchpraxi pitchpraxi-global
+systemctl --user start pitchpraxi pitchpraxi-global
+```
 
 ## Usage
 
-1. **Start the server**
+- **`Alt+Backspace`** — Start/stop recording (configurable via tray menu)
+- **System tray icon** — Right-click for full menu:
+  - Language quick-switch (10 languages)
+  - Translate → English toggle
+  - Change Hotkey
+  - Restart Server
+  - Copy Recent Logs
+  - Transcription History
 
-   ```bash
-   python server.py
-   ```
+### Optional: Noise/Music Filter
 
-   Or use the system tray icon:
+Add `--no-speech-thold 0.6` to the whisper-server command in the systemd service to suppress non-speech segments:
 
-   ```bash
-   # On Windows:
-   python system-tray/start_tray_windows.py
-   # On Linux:
-   python system-tray/start_tray_linux.py
-   ```
+```bash
+ExecStart=... --no-timestamps --no-speech-thold 0.6
+```
 
-   After launching the system tray application:
+Higher values (0.8+) are more aggressive. Adjust based on your environment.
 
-   1. Right-click on the tray icon
-   2. Select "Start Server" from the menu
+## Configuration
 
-2. **Use the extension**
+Settings stored in `~/.config/pitchpraxi/config.json`:
 
-   - Focus on a text field in Firefox
-   - Press `Alt+A` to start/stop recording
-   - Transcription will appear in the focused field
-   - If your server is on a different host/port, set **Server URL** in the extension popup
+```json
+{
+  "server_url": "http://127.0.0.1:5000",
+  "language": "pt",
+  "hotkey_modifier": "alt",
+  "hotkey_key": "backspace",
+  "translate_to_en": false
+}
+```
 
-3. **Stop the server**
-   - Press `Ctrl+C` in the terminal
-   - Or use the system tray icon menu
+## History
 
-## Icon Guide
+Originally **Speechfire** by [Jejkobb](https://github.com/Jejkobb/Speechfire) — a Firefox/Chrome extension for offline STT. Forked and evolved by [aiob3](https://github.com/aiob3) into **PitchPraxi**: a system-wide dictation tool with native C++ engine, 6x faster inference, 13x less memory, and full system tray integration.
 
-- Extension icon:
-  - <img src="extension-firefox/icon/icon-red.png" alt="Red Icon" width="16" height="16"> Recording
-  - <img src="extension-firefox/icon/icon.png" alt="White Icon" width="16" height="16"> Not recording
-- System Tray:
-  - <img src="extension-firefox/icon/icon-green.png" alt="Green Icon" width="16" height="16"> Server running
-  - <img src="extension-firefox/icon/icon.png" alt="White Icon" width="16" height="16"> Server not running
+## License
 
-## Troubleshooting
-
-### Changing the Extension Hotkey
-If you need to change the default `Alt+A` hotkey:
-- Go to Firefox Settings → Extensions & Themes → Manage Extensions
-- Click the gear icon ⚙️ next to Speechfire
-- Select "Manage Extension Shortcuts"
-- Set your preferred key combination
-
-## Additional Notes
-
-- For Linux system tray support:
-  ```bash
-  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-appindicator3-0.1
-  pip install PyGObject
-  ```
-- You can also create a file to launch the system tray application at startup
+MIT — see [LICENSE](./LICENSE) for details.
