@@ -63,7 +63,7 @@ function stopRecording() {
 function sendAudioForTranscription(audioBlob) {
   console.log("Sending audio for transcription");
   chrome.runtime.sendMessage({ action: "getLanguage" }, (response) => {
-    const selectedLanguage = response.language || "English";
+    const selectedLanguage = response.language || "Portuguese";
 
     const formData = new FormData();
     formData.append("audio_data", audioBlob, "audio.wav");

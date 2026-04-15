@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.DEBUG,
 
 # Load Whisper model (on GPU if available)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model_name = os.environ.get('WHISPER_MODEL', 'base')
+model_name = os.environ.get('WHISPER_MODEL', 'small')
 logging.info(f"Loading Whisper model: {model_name}")
 model = whisper.load_model(model_name, device=device)
 
@@ -54,7 +54,7 @@ def transcribe():
             "details": {
                 "language": language,
                 "device": str(device),
-                "model": "base"
+                "model": model_name
             }
         }), 500
         
