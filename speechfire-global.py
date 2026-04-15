@@ -55,6 +55,22 @@ DEFAULT_CONFIG = {
     "translate_to_en": False,
 }
 
+LANGUAGES = [
+    ("pt", "Português"),
+    ("en", "English"),
+    ("es", "Español"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("it", "Italiano"),
+    ("ja", "日本語"),
+    ("zh", "中文"),
+    ("ko", "한국어"),
+    ("auto", "Auto-detect"),
+]
+
+HISTORY_FILE = CONFIG_DIR / 'history.jsonl'
+MAX_HISTORY = 50
+
 
 def load_config():
     """Load config from JSON file, creating defaults if needed."""
@@ -78,6 +94,35 @@ def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
     log.info(f'Config saved to {CONFIG_FILE}')
+
+
+def append_history(entry):
+    """Append a transcription to the history file (JSONL)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(HISTORY_FILE, 'a') as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+
+def load_history(limit=MAX_HISTORY):
+    """Load recent history entries."""
+    if not HISTORY_FILE.exists():
+        return []
+    lines = HISTORY_FILE.read_text().strip().split('\n')
+    entries = []
+    for line in lines[-limit:]:
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+    return entries
+
+
+def get_lang_label(code):
+    """Get display label for a language code."""
+    for c, label in LANGUAGES:
+        if c == code:
+            return f'{label} ({c})'
+    return code
 
 
 class SpeechfireGlobal:
@@ -127,6 +172,7 @@ class SpeechfireGlobal:
     def _build_menu(self):
         menu = Gtk.Menu()
 
+        # ── Status ──
         self.status_item = Gtk.MenuItem(label='Status: Idle')
         self.status_item.set_sensitive(False)
         menu.append(self.status_item)
@@ -134,7 +180,39 @@ class SpeechfireGlobal:
         sep0 = Gtk.SeparatorMenuItem()
         menu.append(sep0)
 
-        # Hotkey display + configure
+        # ── Language quick-switch (radio group) ──
+        lang_header = Gtk.MenuItem(label='── Language ──')
+        lang_header.set_sensitive(False)
+        menu.append(lang_header)
+
+        self.lang_radios = []
+        group = None
+        for code, label in LANGUAGES:
+            radio = Gtk.RadioMenuItem.new_with_label(
+                group.get_group() if group else None,
+                f'{label} ({code})'
+            )
+            if group is None:
+                group = radio
+            if code == self.config['language']:
+                radio.set_active(True)
+            radio.connect('toggled', self._on_lang_toggled, code)
+            self.lang_radios.append((code, radio))
+            menu.append(radio)
+
+        sep1 = Gtk.SeparatorMenuItem()
+        menu.append(sep1)
+
+        # ── Translate toggle ──
+        self.translate_item = Gtk.CheckMenuItem(label='Translate → English')
+        self.translate_item.set_active(self.config.get('translate_to_en', False))
+        self.translate_item.connect('toggled', self._toggle_translate)
+        menu.append(self.translate_item)
+
+        sep2 = Gtk.SeparatorMenuItem()
+        menu.append(sep2)
+
+        # ── Hotkey ──
         self.hotkey_item = Gtk.MenuItem(label=f'Hotkey: {self._hotkey_display()}')
         self.hotkey_item.set_sensitive(False)
         menu.append(self.hotkey_item)
@@ -143,23 +221,34 @@ class SpeechfireGlobal:
         config_hotkey_item.connect('activate', self._show_hotkey_dialog)
         menu.append(config_hotkey_item)
 
-        sep1 = Gtk.SeparatorMenuItem()
-        menu.append(sep1)
+        sep3 = Gtk.SeparatorMenuItem()
+        menu.append(sep3)
 
-        # Language
-        lang_item = Gtk.MenuItem(label=f'Language: {self.config["language"]}')
-        lang_item.set_sensitive(False)
-        menu.append(lang_item)
+        # ── Server ──
+        server_header = Gtk.MenuItem(label='── Server ──')
+        server_header.set_sensitive(False)
+        menu.append(server_header)
 
-        # Translate toggle
-        self.translate_item = Gtk.CheckMenuItem(label='Translate PT → EN')
-        self.translate_item.set_active(self.config.get("translate_to_en", False))
-        self.translate_item.connect('toggled', self._toggle_translate)
-        menu.append(self.translate_item)
+        restart_item = Gtk.MenuItem(label='Restart Server')
+        restart_item.connect('activate', self._restart_server)
+        menu.append(restart_item)
 
-        sep2 = Gtk.SeparatorMenuItem()
-        menu.append(sep2)
+        copy_logs_item = Gtk.MenuItem(label='Copy Recent Logs')
+        copy_logs_item.connect('activate', self._copy_logs)
+        menu.append(copy_logs_item)
 
+        sep4 = Gtk.SeparatorMenuItem()
+        menu.append(sep4)
+
+        # ── History ──
+        history_item = Gtk.MenuItem(label='Transcription History...')
+        history_item.connect('activate', self._show_history)
+        menu.append(history_item)
+
+        sep5 = Gtk.SeparatorMenuItem()
+        menu.append(sep5)
+
+        # ── Quit ──
         quit_item = Gtk.MenuItem(label='Quit Speechfire')
         quit_item.connect('activate', self._quit)
         menu.append(quit_item)
@@ -167,11 +256,148 @@ class SpeechfireGlobal:
         menu.show_all()
         return menu
 
+    def _on_lang_toggled(self, widget, code):
+        if widget.get_active() and code != self.config['language']:
+            self.config['language'] = code
+            save_config(self.config)
+            lang_label = get_lang_label(code)
+            log.info(f'Language changed to: {lang_label}')
+            # Show notification
+            try:
+                subprocess.Popen([
+                    'notify-send', '-i', 'audio-input-microphone',
+                    'Speechfire', f'Language: {lang_label}',
+                    '-t', '2000'
+                ])
+            except Exception:
+                pass
+
     def _toggle_translate(self, widget):
-        self.config["translate_to_en"] = widget.get_active()
+        self.config['translate_to_en'] = widget.get_active()
         save_config(self.config)
-        mode = "PT → EN" if self.config["translate_to_en"] else "Transcription"
+        mode = 'Translate → EN' if self.config['translate_to_en'] else 'Transcription'
         log.info(f'Mode changed: {mode}')
+        try:
+            subprocess.Popen([
+                'notify-send', '-i', 'audio-input-microphone',
+                'Speechfire', f'Mode: {mode}',
+                '-t', '2000'
+            ])
+        except Exception:
+            pass
+
+    def _restart_server(self, widget):
+        """Restart the speechfire.service via systemctl."""
+        log.info('Restarting server...')
+        self.status_item.set_label('Status: Restarting server...')
+        self.indicator.set_icon_full('icon-blue', 'Speechfire — Restarting...')
+
+        def do_restart():
+            try:
+                result = subprocess.run(
+                    ['systemctl', '--user', 'restart', 'speechfire.service'],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    time.sleep(5)  # Wait for server to load model
+                    GLib.idle_add(self._check_server)
+                    log.info('Server restarted successfully')
+                else:
+                    log.error(f'Server restart failed: {result.stderr}')
+                    GLib.idle_add(self._set_error, 'Restart failed')
+            except Exception as e:
+                log.error(f'Server restart error: {e}')
+                GLib.idle_add(self._set_error, str(e))
+
+        threading.Thread(target=do_restart, daemon=True).start()
+
+    def _copy_logs(self, widget):
+        """Copy last 30 lines of server + global logs to clipboard."""
+        try:
+            server_logs = subprocess.run(
+                ['journalctl', '--user', '-u', 'speechfire.service',
+                 '--no-pager', '-n', '15', '--output', 'short-iso'],
+                capture_output=True, text=True, timeout=5
+            ).stdout
+
+            global_logs = subprocess.run(
+                ['journalctl', '--user', '-u', 'speechfire-global.service',
+                 '--no-pager', '-n', '15', '--output', 'short-iso'],
+                capture_output=True, text=True, timeout=5
+            ).stdout
+
+            log_text = (
+                '=== Speechfire Server Logs ===\n' + server_logs +
+                '\n=== Speechfire Global Logs ===\n' + global_logs
+            )
+
+            proc = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+            proc.communicate(log_text.encode('utf-8'))
+
+            log.info('Logs copied to clipboard')
+            subprocess.Popen([
+                'notify-send', '-i', 'edit-copy',
+                'Speechfire', 'Logs copied to clipboard (Ctrl+V to paste)',
+                '-t', '3000'
+            ])
+        except Exception as e:
+            log.error(f'Failed to copy logs: {e}')
+
+    def _show_history(self, widget):
+        """Show transcription history in a dialog."""
+        entries = load_history()
+        if not entries:
+            dialog = Gtk.MessageDialog(
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.OK,
+                text="No transcription history yet"
+            )
+            dialog.run()
+            dialog.destroy()
+            return
+
+        dialog = Gtk.Dialog(
+            title='Speechfire — Transcription History',
+            flags=Gtk.DialogFlags.DESTROY_WITH_PARENT
+        )
+        dialog.set_default_size(700, 500)
+        dialog.add_button('Copy All', 1)
+        dialog.add_button('Close', Gtk.ResponseType.CLOSE)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+
+        textview = Gtk.TextView()
+        textview.set_editable(False)
+        textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        textview.set_left_margin(10)
+        textview.set_right_margin(10)
+        textview.set_top_margin(10)
+
+        buf = textview.get_buffer()
+        lines = []
+        for e in reversed(entries):
+            ts = e.get('timestamp', '?')
+            lang = e.get('language', '?')
+            duration = e.get('server_time', '?')
+            text = e.get('text', '')
+            mode = '→EN' if e.get('translated') else lang
+            lines.append(f'[{ts}] ({mode}, {duration}s)\n{text}\n')
+
+        buf.set_text('\n'.join(lines))
+        scrolled.add(textview)
+        dialog.get_content_area().add(scrolled)
+        dialog.show_all()
+
+        response = dialog.run()
+        if response == 1:
+            # Copy all
+            all_text = '\n'.join(lines)
+            proc = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+            proc.communicate(all_text.encode('utf-8'))
+            log.info('History copied to clipboard')
+
+        dialog.destroy()
 
     def _show_hotkey_dialog(self, widget):
         """Show dialog to capture new hotkey."""
@@ -350,8 +576,19 @@ class SpeechfireGlobal:
                 data = resp.json()
                 text = (data.get('text') or data.get('transcription') or '').strip()
                 if text:
-                    log.info(f'TIMING: save={t1-t0:.3f}s server={t2-t1:.3f}s total={t2-t0:.3f}s')
+                    server_time = round(t2 - t1, 2)
+                    log.info(f'TIMING: save={t1-t0:.3f}s server={server_time}s total={t2-t0:.3f}s')
                     log.info(f'Transcription: {text}')
+
+                    # Save to history
+                    append_history({
+                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'text': text,
+                        'language': self.config['language'],
+                        'translated': self.config.get('translate_to_en', False),
+                        'server_time': server_time,
+                    })
+
                     GLib.idle_add(self._paste_text, text)
                 else:
                     log.warning('Empty transcription')
