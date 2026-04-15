@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
     "server_url": "http://127.0.0.1:5000",
     "language": "pt",
     "hotkey_modifier": "alt",
-    "hotkey_key": "\\",
+    "hotkey_key": "backslash",
     "translate_to_en": False,
 }
 
@@ -449,7 +449,7 @@ class SpeechfireGlobal:
             self.hotkey_item.set_label(f'Hotkey: {self._hotkey_display()}')
             log.info(f'Hotkey changed to: {self._hotkey_display()}')
 
-    # --- Hotkey handling ---
+    # --- Hotkey handling (HOMOLOGADO — nao alterar sem teste) ---
     def _is_modifier_pressed(self, mod_name):
         if mod_name == 'alt':
             return self.alt_pressed
