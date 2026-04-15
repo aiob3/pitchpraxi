@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
     "server_url": "http://127.0.0.1:5000",
     "language": "pt",
     "hotkey_modifier": "alt",
-    "hotkey_key": "backslash",
+    "hotkey_key": "backspace",
     "translate_to_en": False,
 }
 
