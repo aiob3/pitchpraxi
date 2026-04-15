@@ -184,18 +184,20 @@ class SpeechfireGlobal:
 
             t1 = time.time()
 
-            # Send to server
+            # Send to server (whisper.cpp /inference API)
             with open(tmp.name, 'rb') as f:
                 resp = requests.post(
-                    f'{SERVER_URL}/transcribe?lang={LANGUAGE}',
-                    files={'audio_data': ('audio.wav', f, 'audio/wav')},
+                    f'{SERVER_URL}/inference',
+                    files={'file': ('audio.wav', f, 'audio/wav')},
+                    data={'response_format': 'json', 'language': 'pt'},
                     timeout=120
                 )
 
             t2 = time.time()
 
             if resp.status_code == 200:
-                text = resp.json().get('transcription', '').strip()
+                data = resp.json()
+                text = (data.get('text') or data.get('transcription') or '').strip()
                 if text:
                     log.info(f'TIMING: save={t1-t0:.3f}s server={t2-t1:.3f}s total={t2-t0:.3f}s')
                     log.info(f'Transcription: {text}')
